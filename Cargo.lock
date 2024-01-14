@@ -2731,6 +2731,7 @@ dependencies = [
  "async-trait",
  "base64 0.21.5",
  "bincode",
+ "bytes",
  "cbc",
  "chrono",
  "dashmap",
@@ -6387,6 +6388,7 @@ name = "utils"
 version = "0.5.0"
 dependencies = [
  "ahash 0.8.6",
+ "bytes",
  "chrono",
  "dashmap",
  "mail-auth",

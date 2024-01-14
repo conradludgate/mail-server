@@ -21,18 +21,28 @@
  * for more details.
 */
 
+use bytes::{BufMut, Bytes, BytesMut};
 use directory::QueryBy;
+use futures_util::StreamExt;
 use jmap_proto::types::{state::StateChange, type_state::DataType};
 use mail_parser::MessageParser;
 use store::ahash::AHashMap;
-use utils::ipc::{DeliveryResult, IngestMessage};
+use utils::ipc::{BoxedByteStream, BoxedError, DeliveryResult, IngestMessage};
 
 use crate::{email::ingest::IngestEmail, mailbox::INBOX_ID, IngestError, JMAP};
 
+async fn collect_bytes(mut bytes: BoxedByteStream) -> Result<Bytes, BoxedError> {
+    let mut buf = BytesMut::new();
+    while let Some(bytes) = bytes.next().await {
+        buf.put(bytes?)
+    }
+    Ok(buf.freeze())
+}
+
 impl JMAP {
-    pub async fn deliver_message(&self, message: IngestMessage) -> Vec<DeliveryResult> {
+    pub async fn deliver_message(&self, mut message: IngestMessage) -> Vec<DeliveryResult> {
         // Read message
-        let raw_message = match message.read_message().await {
+        let raw_message = match collect_bytes(message.read_message()).await {
             Ok(raw_message) => raw_message,
             Err(_) => {
                 return (0..message.recipients.len())
@@ -82,7 +92,7 @@ impl JMAP {
 
                     self.email_ingest(IngestEmail {
                         raw_message: &raw_message,
-                        message: MessageParser::new().parse(&raw_message),
+                        message: MessageParser::new().parse(&*raw_message),
                         account_id: *uid,
                         account_quota,
                         mailbox_ids: vec![INBOX_ID],
