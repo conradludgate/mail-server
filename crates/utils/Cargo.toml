@@ -27,6 +27,7 @@ ahash = { version = "0.8" }
 chrono = "0.4"
 rand = "0.8.5"
 webpki-roots = { version = "0.26"}
+futures = "0.3"
 bytes = "1"
 
 [target.'cfg(unix)'.dependencies]
