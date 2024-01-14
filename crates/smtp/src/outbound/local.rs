@@ -63,8 +63,10 @@ impl Message {
                 message: IngestMessage {
                     sender_address: self.return_path_lcase.clone(),
                     recipients: recipient_addresses,
-                    message_path: self.path.clone(),
-                    message_size: self.size,
+                    message_data: utils::ipc::MessageData::File {
+                        message_path: self.path.clone(),
+                        message_size: self.size,
+                    },
                 },
                 result_tx,
             })

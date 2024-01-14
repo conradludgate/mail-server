@@ -21,8 +21,10 @@
  * for more details.
 */
 
-use std::{borrow::Cow, path::PathBuf};
+use std::{borrow::Cow, path::PathBuf, pin::Pin};
 
+use bytes::{Bytes, BytesMut};
+use futures::Stream;
 use tokio::{fs, io::AsyncReadExt, sync::oneshot};
 
 #[derive(Debug)]
@@ -38,8 +40,36 @@ pub enum DeliveryEvent {
 pub struct IngestMessage {
     pub sender_address: String,
     pub recipients: Vec<String>,
-    pub message_path: PathBuf,
-    pub message_size: usize,
+    pub message_data: MessageData,
+}
+
+pub type BoxedError = Box<dyn std::error::Error + Sync + Send>;
+pub type BoxedByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, BoxedError>> + Send + 'static>>;
+
+pub enum MessageData {
+    File {
+        message_path: PathBuf,
+        message_size: usize,
+    },
+    Bytes(BoxedByteStream),
+    Empty,
+}
+
+impl std::fmt::Debug for MessageData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File {
+                message_path,
+                message_size,
+            } => f
+                .debug_struct("File")
+                .field("message_path", message_path)
+                .field("message_size", message_size)
+                .finish(),
+            Self::Bytes(_) => f.debug_tuple("Bytes").finish(),
+            Self::Empty => write!(f, "Empty"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -55,27 +85,45 @@ pub enum DeliveryResult {
 }
 
 impl IngestMessage {
-    pub async fn read_message(&self) -> Result<Vec<u8>, ()> {
-        let mut raw_message = vec![0u8; self.message_size];
-        let mut file = fs::File::open(&self.message_path).await.map_err(|err| {
-            tracing::error!(
-                context = "read_message",
-                event = "error",
-                "Failed to open message file {}: {}",
-                self.message_path.display(),
-                err
-            );
-        })?;
-        file.read_exact(&mut raw_message).await.map_err(|err| {
-            tracing::error!(
-                context = "read_message",
-                event = "error",
-                "Failed to read {} bytes file {} from disk: {}",
-                self.message_size,
-                self.message_path.display(),
-                err
-            );
-        })?;
-        Ok(raw_message)
+    pub fn read_message(&mut self) -> BoxedByteStream {
+        self.message_data.read_message()
+    }
+}
+
+impl MessageData {
+    pub fn read_message(&mut self) -> BoxedByteStream {
+        match std::mem::replace(self, MessageData::Empty) {
+            MessageData::File {
+                message_path,
+                message_size,
+            } => Box::pin(futures::stream::once(async move {
+                let mut raw_message = BytesMut::with_capacity(message_size);
+                raw_message.resize(message_size, 0);
+                let mut file = fs::File::open(&message_path).await.map_err(|err| {
+                    tracing::error!(
+                        context = "read_message",
+                        event = "error",
+                        "Failed to open message file {}: {}",
+                        message_path.display(),
+                        err
+                    );
+                    err
+                })?;
+                file.read_exact(&mut raw_message).await.map_err(|err| {
+                    tracing::error!(
+                        context = "read_message",
+                        event = "error",
+                        "Failed to read {} bytes file {} from disk: {}",
+                        message_size,
+                        message_path.display(),
+                        err
+                    );
+                    err
+                })?;
+                Ok(raw_message.freeze())
+            })),
+            MessageData::Bytes(b) => b,
+            MessageData::Empty => Box::pin(futures::stream::empty()),
+        }
     }
 }
