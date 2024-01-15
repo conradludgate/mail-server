@@ -35,9 +35,19 @@ use utils::{
 
 pub struct S3Store {
     bucket: Bucket,
+    prefix: String,
 }
 
 impl S3Store {
+    fn get_path(&self, key: &[u8]) -> String {
+        let key = Base32Writer::from_bytes(key).finalize();
+        if self.prefix.is_empty() {
+            key
+        } else {
+            format!("{}/{key}", self.prefix)
+        }
+    }
+
     pub async fn open(config: &Config, prefix: impl AsKey) -> crate::Result<Self> {
         // Obtain region and endpoint from config
         let prefix = prefix.as_key();
@@ -60,6 +70,10 @@ impl S3Store {
         let timeout = config.property_or_static::<Duration>((&prefix, "timeout"), "30s")?;
 
         Ok(S3Store {
+            prefix: config
+                .value((&prefix, "prefix"))
+                .unwrap_or_default()
+                .to_owned(),
             bucket: Bucket::new(
                 config.value_require((&prefix, "bucket"))?,
                 region,
@@ -75,7 +89,7 @@ impl S3Store {
         key: &[u8],
         range: Range<u32>,
     ) -> crate::Result<Option<Vec<u8>>> {
-        let path = Base32Writer::from_bytes(key).finalize();
+        let path = self.get_path(key);
         let response = if range.start != 0 || range.end != u32::MAX {
             self.bucket
                 .get_object_range(
@@ -102,11 +116,8 @@ impl S3Store {
     }
 
     pub(crate) async fn put_blob(&self, key: &[u8], data: &[u8]) -> crate::Result<()> {
-        match self
-            .bucket
-            .put_object(Base32Writer::from_bytes(key).finalize(), data)
-            .await
-        {
+        let path = self.get_path(key);
+        match self.bucket.put_object(path, data).await {
             Ok(response) if (200..300).contains(&response.status_code()) => Ok(()),
             Ok(response) => Err(crate::Error::InternalError(format!(
                 "S3 error code {}: {}",
@@ -118,8 +129,9 @@ impl S3Store {
     }
 
     pub(crate) async fn delete_blob(&self, key: &[u8]) -> crate::Result<bool> {
+        let path = self.get_path(key);
         self.bucket
-            .delete_object(Base32Writer::from_bytes(key).finalize())
+            .delete_object(path)
             .await
             .map(|response| (200..300).contains(&response.status_code()))
             .map_err(|e| e.into())
