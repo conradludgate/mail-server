@@ -87,13 +87,19 @@ pub fn failed(message: &str) -> ! {
     std::process::exit(1);
 }
 
-pub fn enable_tracing(config: &Config, message: &str) -> config::Result<Option<WorkerGuard>> {
+pub fn enable_tracing(
+    config: &Config,
+    map_filter: impl FnOnce(EnvFilter) -> EnvFilter,
+    message: &str,
+) -> config::Result<Option<WorkerGuard>> {
     let level = config.value("global.tracing.level").unwrap_or("info");
     let env_filter = EnvFilter::builder()
         .parse(format!(
             "smtp={level},imap={level},jmap={level},store={level},utils={level},directory={level}"
         ))
         .failed("Failed to log level");
+    let env_filter = map_filter(env_filter);
+
     let result = match config.value("global.tracing.method").unwrap_or_default() {
         "log" => {
             let path = config.value_require("global.tracing.path")?;
