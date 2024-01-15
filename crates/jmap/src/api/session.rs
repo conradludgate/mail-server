@@ -31,7 +31,7 @@ use jmap_proto::{
     types::{acl::Acl, collection::Collection, id::Id, type_state::DataType},
 };
 use store::ahash::AHashSet;
-use utils::{listener::ServerInstance, map::vec_map::VecMap, UnwrapFailure};
+use utils::{map::vec_map::VecMap, UnwrapFailure};
 
 use crate::{auth::AccessToken, JMAP};
 
@@ -186,10 +186,10 @@ pub struct BaseCapabilities {
 impl JMAP {
     pub async fn handle_session_resource(
         &self,
-        instance: Arc<ServerInstance>,
         access_token: Arc<AccessToken>,
+        base_url: String,
     ) -> Result<Session, RequestError> {
-        let mut session = Session::new(&instance.data, &self.config.capabilities);
+        let mut session = Session::new(&base_url, &self.config.capabilities);
         session.set_state(access_token.state());
         session.set_primary_account(
             access_token.primary_id().into(),

@@ -1,4 +1,4 @@
-FROM debian:bullseye-slim 
+FROM debian:bullseye-slim
 
 RUN apt-get update -y && apt-get install -yq ca-certificates curl
 

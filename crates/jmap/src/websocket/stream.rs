@@ -45,11 +45,12 @@ impl JMAP {
         mut stream: WebSocketStream<TokioIo<Upgraded>>,
         access_token: Arc<AccessToken>,
         instance: Arc<ServerInstance>,
+        base_url: String,
     ) {
         let span = tracing::info_span!(
             "WebSocket connection established",
             "account_id" = access_token.primary_id(),
-            "url" = instance.data,
+            "url" = base_url,
         );
 
         // Set timeouts

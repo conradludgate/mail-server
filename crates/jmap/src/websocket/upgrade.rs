@@ -42,6 +42,7 @@ pub async fn upgrade_websocket_connection(
     req: HttpRequest,
     access_token: Arc<AccessToken>,
     instance: Arc<ServerInstance>,
+    base_url: String,
 ) -> HttpResponse {
     let headers = req.headers();
     if headers
@@ -89,6 +90,7 @@ pub async fn upgrade_websocket_connection(
                         .await,
                     access_token,
                     instance,
+                    base_url,
                 )
                 .await;
             }

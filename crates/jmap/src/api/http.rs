@@ -42,7 +42,11 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
-use utils::listener::{ServerInstance, SessionData, SessionManager};
+use url::Url;
+use utils::{
+    listener::{ServerInstance, SessionData, SessionManager},
+    UnwrapFailure,
+};
 
 use crate::{
     auth::{oauth::OAuthMetadata, AccessToken},
@@ -61,6 +65,7 @@ pub async fn parse_jmap_request(
     mut req: HttpRequest,
     remote_ip: IpAddr,
     instance: Arc<ServerInstance>,
+    base_url: String,
 ) -> HttpResponse {
     let mut path = req.uri().path().split('/');
     path.next();
@@ -166,8 +171,14 @@ pub async fn parse_jmap_request(
                     return jmap.handle_event_source(req, access_token).await
                 }
                 ("ws", &Method::GET) => {
-                    return upgrade_websocket_connection(jmap, req, access_token, instance.clone())
-                        .await;
+                    return upgrade_websocket_connection(
+                        jmap,
+                        req,
+                        access_token,
+                        instance.clone(),
+                        base_url,
+                    )
+                    .await;
                 }
                 (_, &Method::OPTIONS) => {
                     return ().into_http_response();
@@ -185,7 +196,7 @@ pub async fn parse_jmap_request(
                         Err(err) => return err.into_http_response(),
                     };
 
-                return match jmap.handle_session_resource(instance, access_token).await {
+                return match jmap.handle_session_resource(access_token, base_url).await {
                     Ok(session) => session.into_http_response(),
                     Err(err) => err.into_http_response(),
                 };
@@ -194,9 +205,7 @@ pub async fn parse_jmap_request(
                 let remote_addr = jmap.build_remote_addr(&req, remote_ip);
                 // Limit anonymous requests
                 return match jmap.is_anonymous_allowed(&remote_addr) {
-                    Ok(_) => {
-                        JsonResponse::new(OAuthMetadata::new(&instance.data)).into_http_response()
-                    }
+                    Ok(_) => JsonResponse::new(OAuthMetadata::new(&base_url)).into_http_response(),
                     Err(err) => err.into_http_response(),
                 };
             }
@@ -241,7 +250,7 @@ pub async fn parse_jmap_request(
                 }
                 ("device", &Method::POST) => {
                     return match jmap.is_anonymous_allowed(&remote_addr) {
-                        Ok(_) => jmap.handle_device_auth(&mut req, instance).await,
+                        Ok(_) => jmap.handle_device_auth(&mut req, base_url).await,
                         Err(err) => err.into_http_response(),
                     }
                 }
@@ -294,11 +303,17 @@ impl SessionManager for JmapSessionManager {
     fn spawn(&self, session: SessionData<TcpStream>) {
         let jmap = self.inner.clone();
 
+        let mut base_url =
+            Url::parse(&session.instance.data).failed("base jmap url should be provided");
+
         tokio::spawn(async move {
             if let Some(tls_acceptor) = &session.instance.tls_acceptor {
                 let span = session.span;
                 match tls_acceptor.accept(session.stream).await {
                     Ok(stream) => {
+                        if let Some(host) = stream.get_ref().1.server_name() {
+                            base_url.set_host(Some(host)).failed("invalid sni");
+                        }
                         handle_request(
                             jmap,
                             SessionData {
@@ -310,6 +325,7 @@ impl SessionManager for JmapSessionManager {
                                 in_flight: session.in_flight,
                                 instance: session.instance,
                             },
+                            base_url,
                         )
                         .await;
                     }
@@ -324,7 +340,7 @@ impl SessionManager for JmapSessionManager {
                     }
                 }
             } else {
-                handle_request(jmap, session).await;
+                handle_request(jmap, session, base_url).await;
             }
         });
     }
@@ -340,6 +356,7 @@ impl SessionManager for JmapSessionManager {
 async fn handle_request<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     jmap: Arc<JMAP>,
     session: SessionData<T>,
+    base_url: Url,
 ) {
     let span = session.span;
     let _in_flight = session.in_flight;
@@ -352,17 +369,25 @@ async fn handle_request<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                 let jmap = jmap.clone();
                 let span = span.clone();
                 let instance = session.instance.clone();
+                let base_url = base_url.to_string();
 
                 async move {
                     tracing::debug!(
                         parent: &span,
                         event = "request",
                         uri = req.uri().to_string(),
+                        base_url = base_url,
                     );
 
                     // Parse JMAP request
-                    let mut response =
-                        parse_jmap_request(jmap.clone(), req, session.remote_ip, instance).await;
+                    let mut response = parse_jmap_request(
+                        jmap.clone(),
+                        req,
+                        session.remote_ip,
+                        instance,
+                        base_url,
+                    )
+                    .await;
 
                     // Add custom headers
                     if !jmap.config.http_headers.is_empty() {

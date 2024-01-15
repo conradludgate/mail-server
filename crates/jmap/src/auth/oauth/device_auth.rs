@@ -31,7 +31,7 @@ use store::rand::{
     distributions::{Alphanumeric, Standard},
     thread_rng, Rng,
 };
-use utils::{listener::ServerInstance, map::ttl_dashmap::TtlMap};
+use utils::map::ttl_dashmap::TtlMap;
 
 use crate::{
     api::{http::ToHttpResponse, HtmlResponse, HttpRequest, HttpResponse, JsonResponse},
@@ -56,7 +56,7 @@ impl JMAP {
     pub async fn handle_device_auth(
         &self,
         req: &mut HttpRequest,
-        instance: Arc<ServerInstance>,
+        base_url: String,
     ) -> HttpResponse {
         // Parse form
         let client_id = match FormData::from_request(req, MAX_POST_LEN)
@@ -110,8 +110,8 @@ impl JMAP {
 
         // Build response
         JsonResponse::new(DeviceAuthResponse {
-            verification_uri: format!("{}/auth", instance.data),
-            verification_uri_complete: format!("{}/auth/code?={}", instance.data, user_code),
+            verification_uri: format!("{}/auth", base_url),
+            verification_uri_complete: format!("{}/auth/code?={}", base_url, user_code),
             device_code,
             user_code,
             expires_in: self.config.oauth_expiry_user_code,
